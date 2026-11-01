@@ -1,11 +1,11 @@
 # Neural Movie Review Sentiment Analysis with Explainable Error Analysis
 
 A TensorFlow binary text classifier that reads an IMDB movie review and predicts whether the
-sentiment is positive or negative — built as an end-to-end pipeline rather than a single script,
-so every stage (exploration, cleaning, vectorization, training, evaluation, error analysis) can be
-See [FAILURES.md](./FAILURES.md) for what can go wrong, what broke, how it was fixed, and results.
+sentiment is positive or negative, for anyone learning how a text model is built and checked end to end.
+It is a pipeline rather than a single script, so every stage (exploration, cleaning, vectorization,
+training, evaluation, error analysis) can be inspected and explained on its own.
 
-inspected and explained on its own.
+See [FAILURES.md](./FAILURES.md) for what can go wrong, what broke, how it was fixed, and results.
 
 Dataset: [Large Movie Review Dataset](https://ai.stanford.edu/~amaas/data/sentiment/) (aclImdb),
 50,000 labelled reviews, Maas et al. (2011).
@@ -69,6 +69,43 @@ behind, so run the scripts first.
 Everything runs on CPU. Rough timings on a modest laptop: download + extract ~15 min (100,000 tiny
 files), EDA ~3 min, pooling model ~1 min/epoch, BiLSTM ~8.5 min/epoch, evaluation ~4 min.
 
+## Verified run (1 November 2026)
+
+Fresh virtual environment on Linux, Python 3.12, CPU only, `pip install -r requirements.txt` (TensorFlow 2.21) installed cleanly.
+
+`download_data.py` could not reach ai.stanford.edu from the test machine, so the same 50,000 reviews
+were rebuilt in the `data/aclImdb/{train,test}/{pos,neg}` layout from the Hugging Face copy
+(`stanfordnlp/imdb`). The file names differ from the original archive, so the train/validation split
+differs slightly and numbers will not match the committed reports exactly. Everything after the download ran unchanged:
+
+| Step | Time | Result |
+| --- | --- | --- |
+| `explore_data.py` | 12 s | 25,000 / 25,000, exactly 50/50 |
+| `preprocess.py` | 5 s | ok |
+| `train.py --model pooling --epochs 15` | 20 s | early stopping at epoch 3, best weights from epoch 1 |
+| `evaluate.py --model pooling` | 10 s | see below |
+| `predict.py --model pooling` | 3 s | demo reviews scored |
+
+| Pooling model on the 25,000 test reviews | Committed report | This run |
+| --- | --- | --- |
+| Accuracy at 0.5 | 0.853 | 0.858 |
+| ROC AUC | 0.942 | 0.942 |
+| Tuned threshold (from validation) | 0.27 | 0.28 |
+| Accuracy at tuned threshold | 0.868 | 0.867 |
+
+So the headline results reproduce within about half a point. The BiLSTM model was not retrained in this check.
+
+Real `predict.py` output, including one honest miss on a mixed review:
+
+```text
+"This movie was absolutely brilliant. I loved every minute of it."
+  Sentiment : Positive (strong)
+  Score     : 0.9986
+"The film had some good moments but overall it was average."
+  Sentiment : Positive (strong)
+  Score     : 0.9573
+```
+
 ## Project structure
 
 ```
@@ -102,7 +139,7 @@ sentiment-analysis/
 
 Each review is one text file; its parent folder (`pos` / `neg`) is the label, so there are exactly
 two variables: `text` (X) and `label` (y, with 0 = negative and 1 = positive). IMDB kept only
-polarised reviews — negatives scored <= 4/10, positives >= 7/10 — so there is no neutral class.
+polarised reviews, negatives scored <= 4/10, positives >= 7/10, so there is no neutral class.
 
 From `reports/eda_summary.md`:
 
@@ -111,7 +148,7 @@ From `reports/eda_summary.md`:
 | Labelled reviews | 50,000 (25,000 train / 25,000 test) |
 | Class balance | exactly 50/50 in both splits |
 | Exact duplicate texts | 418 |
-| Review length | mean 228 words, median 171, range 4–2,459 |
+| Review length | mean 228 words, median 171, range 4 to 2,459 |
 | Truncated at `SEQUENCE_LENGTH=250` | 29% of reviews |
 
 The dataset being perfectly balanced is what makes plain accuracy meaningful here; on a 90/10 split
@@ -120,7 +157,7 @@ a model that always answered "positive" would score 90% while learning nothing.
 ### The word-frequency analysis found a leak
 
 Tokens are ranked by how much more often they occur in positive than in negative reviews
-(log2 of the rate ratio, smoothed, minimum 100 occurrences) — nothing hand-picked:
+(log2 of the rate ratio, smoothed, minimum 100 occurrences). Nothing is hand-picked:
 
 | Positive-associated | Negative-associated |
 | --- | --- |
@@ -152,7 +189,7 @@ AFTER   i absolutely loved this movie amazing 1010
 ```
 
 It is written with `tf.strings` ops and handed to `TextVectorization(standardize=clean_text)`, so
-the same cleaning applies during training *and* inside the saved model at inference time — there is
+the same cleaning applies during training *and* inside the saved model at inference time; there is
 no way for the two to drift apart.
 
 `TextVectorization` then learns the 20,000 most frequent training tokens and maps each word to an
@@ -212,14 +249,14 @@ Three findings, none of them "my accuracy is X%":
 - **The 0.5 threshold is the biggest single weakness.** Accuracy 0.853 against ROC-AUC 0.942 means
   the model *ranks* reviews well and simply cuts them in the wrong place: it misses positives
   (recall 0.78) far more often than it invents them (precision 0.91). Choosing the threshold on the
-  validation set (0.27) and applying it unchanged to test lifts accuracy to 0.868 — a bigger gain
+  validation set (0.27) and applying it unchanged to test lifts accuracy to 0.868, a bigger gain
   than changing the architecture, at zero training cost. Tuning on the test set instead would have
   been cheating, so `evaluate.py` fits the threshold on validation only.
 
   ![Prediction confidence](reports/figures/score_distribution_pooling.png)
 
   The positive reviews (green) have a long tail reaching down towards 0, while the negatives (red)
-  pile up hard against 0 — so moving the cut-off left recovers real positives cheaply.
+  pile up hard against 0, so moving the cut-off left recovers real positives cheaply.
 
 - **Word order did not pay for itself.** The BiLSTM costs roughly 10x the training time per epoch
   (~8.5 min vs ~50 s here) and lands within 0.1pp of the bag-of-words model. It does produce lower
@@ -238,10 +275,10 @@ Three findings, none of them "my accuracy is X%":
 | False positives (neg read as pos) | 947 | 1,210 |
 | False negatives (pos read as neg) | 2,722 | 2,478 |
 | Mean length: correct vs wrong | 222 vs 266 words | 222 vs 268 words |
-| Reviews in the uncertain 0.4–0.6 band | 1,526 | 1,996 |
+| Reviews in the uncertain 0.4 to 0.6 band | 1,526 | 1,996 |
 
 - **The two architectures fail on the same reviews.** 2,620 identical review texts are wrong in both
-  models — 55.8% of their combined unique errors. Those failures live in the data and the features, not in
+  models, 55.8% of their combined unique errors. Those failures live in the data and the features, not in
   the choice of layer, which is exactly why swapping in the BiLSTM moved accuracy by 0.1pp.
   (`python src/evaluate.py --compare-only` reproduces this.)
 - **Sarcasm fails**, as expected when sentiment is inferred from vocabulary. The pooling model's most
@@ -276,19 +313,19 @@ place where reading word order visibly changed behaviour.
 ## The questions this project answers
 
 1. **What is sentiment analysis?** Text classification where the target is the writer's attitude;
-   here binary — did they like the film.
+   here binary: did they like the film.
 2. **What does the dataset contain?** 50,000 IMDB reviews as plain-text files, labelled by folder,
    polarised (no neutral reviews), plus 50,000 unlabelled ones that `download_data.py` deletes
    because `text_dataset_from_directory` would read them as a third class.
-3. **Is it balanced?** Exactly 50/50 in both splits — verified, not assumed.
+3. **Is it balanced?** Exactly 50/50 in both splits; verified, not assumed.
 4. **How long are the reviews?** Median 171 words, mean 228, max 2,459; 29% exceed the 250-token cut-off.
 5. **Which tokens appear frequently?** See the table above, plus `reports/word_scores.csv`; raw
    frequency is dominated by stopwords, so tokens are scored by their positive/negative rate ratio.
 6. **How was the text cleaned?** Lowercase, `<br />` removal, punctuation and non-ASCII stripping,
-   whitespace collapse — inside the vectorizer, so cleaning ships with the model.
+   whitespace collapse, inside the vectorizer, so cleaning ships with the model.
 7. **How does text become numbers?** `TextVectorization` maps each token to a vocabulary index and
    pads to a fixed length.
-8. **Why embeddings?** Token indices are arbitrary labels, not quantities — index 5,000 is not
+8. **Why embeddings?** Token indices are arbitrary labels, not quantities; index 5,000 is not
    "more" than index 10. An embedding replaces each index with a trainable 128-dimensional vector,
    so words used in similar contexts end up with similar vectors and the network can generalise
    across them.
@@ -301,15 +338,15 @@ place where reading word order visibly changed behaviour.
 12. **What does `model.fit()` do?** Per batch of 32: forward pass, compute loss, backpropagate the
     gradient of the loss with respect to every weight, let Adam step the weights downhill; repeat
     for every batch, then every epoch.
-13. **Training loss?** Error on the data the weights are being fitted to — it almost always falls.
+13. **Training loss?** Error on the data the weights are being fitted to; it almost always falls.
 14. **Validation loss?** Error on 5,000 held-out reviews the model never trains on: the honest
     signal while developing.
-15. **Is it overfitting?** Yes, from epoch 2 onwards — training accuracy 0.96 against validation
+15. **Is it overfitting?** Yes, from epoch 2 onwards: training accuracy 0.96 against validation
     0.87, with validation loss rising. Early stopping restores the best epoch.
 16. **Final test accuracy?** 0.8532 at threshold 0.5, or 0.8679 at the validation-chosen threshold
     of 0.27, for the pooling model; 0.8525 / 0.8594 for the BiLSTM.
 17. **What does it misclassify?** Sarcasm, negation, mixed verdicts, long reviews, and some plainly
-    mislabelled files — and both architectures fail on the same 2,620 reviews.
+    mislabelled files, and both architectures fail on the same 2,620 reviews.
 18. **What improves it?** Measured here: threshold tuning gained +1.5pp, swapping in a BiLSTM gained
     nothing for 10x the compute. Untested but promising: bigrams via `TextVectorization(ngrams=2)`,
     pretrained embeddings or a fine-tuned transformer, stronger regularisation to delay the
@@ -328,3 +365,13 @@ place where reading word order visibly changed behaviour.
 
 Andrew L. Maas, Raymond E. Daly, Peter T. Pham, Dan Huang, Andrew Y. Ng and Christopher Potts.
 *Learning Word Vectors for Sentiment Analysis.* ACL 2011.
+
+## Status
+
+Complete as a learning and portfolio project. No tests or CI; the scripts are the checks. Not used in production.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The dataset has its own terms from its authors.
+
+More of my work: https://cv.omnitest.dev/
