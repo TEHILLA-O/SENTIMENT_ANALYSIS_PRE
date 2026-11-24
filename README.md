@@ -352,6 +352,10 @@ place where reading word order visibly changed behaviour.
     pretrained embeddings or a fine-tuned transformer, stronger regularisation to delay the
     overfitting, dropping digits to close the rating leak, and a longer sequence cut-off.
 
+## Transformer follow-up
+
+The transformer version of this work lives in [small_model_finetune](https://github.com/TEHILLA-O/small_model_finetune): BERT-Mini fine-tuned on SST-2 and tested on IMDB, with LoRA and learning rate ablations over 3 seeds, a reproduction of the published BERT-Mini SST-2 score (86.2% on SST-2 validation against 85.9% reported on the test set), calibration, significance tests against TF-IDF, and int8 ONNX inference benchmarks.
+
 ## Notes and limitations
 
 - The `810`/`310` rating leak means part of the measured accuracy comes from reading numeric scores
